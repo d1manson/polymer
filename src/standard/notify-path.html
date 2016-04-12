@@ -63,13 +63,89 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    let debouce_timeout = null;
    let debounced_notify_path_list = [];
 
-   var process_decounced_notify_paths = function(){
-      //console.log("debounce notifying...");
+   var process_debounced_notify_paths = function(){      
+      /*
+      // use original mechanism
+      
       for(let item of debounced_notify_path_list){
-          item.model.notifyPath(item.path, item.value);
+          item.model.notifyPath(item.path, item.model.get(item.path));
       }
-      //console.log("debounced notifying finished.");
-      debounced_notify_path_list = [];
+      debounced_notify_path_list.length = 0;
+      return;
+      */
+
+      let models = new Map();
+      for(let item of debounced_notify_path_list){
+          let model_items = models.get(item.model);
+          if(!model_items){
+            model_items = [];
+            models.set(item.model, model_items);
+          }
+          model_items.push(Array.isArray(item.path) ? item.path.join(".") : item.path);
+      }
+
+      for(let [model, paths_for_model] of models){
+          paths_for_model.sort();
+          let property = '.';
+          let paths_for_property = [];
+          let last_path = '';
+          for(let path of paths_for_model){
+            if((path + ".").substring(0, property.length) !== property){
+              notify_paths_for_model_property.call(model, property.slice(0,-1), paths_for_property);
+              property = path.split(".", 1)[0] + ".";
+              paths_for_property.length = 0;
+            }
+            (path !== last_path) && paths_for_property.push(path);
+            last_path = path;
+          }
+          notify_paths_for_model_property.call(model, property.slice(0,-1), paths_for_property);
+      }
+
+      debounced_notify_path_list.length = 0;
+   };
+
+
+   var notify_paths_for_model_property = function(property, paths, from_above){
+      if(!property){
+        return;
+      }
+
+      let values = [];
+      for(let path of paths){
+        values.push(this._get(path));
+      }
+
+      let fx$ = this._propertyEffects && this._propertyEffects[property];    
+      if (fx$) {
+        for (let fx of fx$) {
+          // use memoized path functions
+          let fxFn = fx.pathFn;
+          if (fxFn) {
+            for(let ii=0; ii<paths.length; ii++){
+              fxFn.call(this, paths[ii], values[ii], fx.effect);
+            }
+          }
+        }
+      }
+
+      // notify runtime-bound paths
+      if (this._boundPaths) {
+        for(let ii=0; ii<paths.length; ii++){
+          this._notifyBoundPaths(paths[ii], values[ii]);
+        }
+      }
+
+      // notify up
+      if(!from_above){
+        let event_name = this._modelForPath(property) + this._EVENT_CHANGED;
+        for(let ii=0; ii<paths.length; ii++){
+            this.fire(event_name, {
+              path: paths[ii],
+              value: values[ii]
+            }, {bubbles: false, _useCache: true});
+        }
+      }
+
    };
 
 
@@ -81,7 +157,19 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
     Polymer.Base._addFeature({
 
 
-      notifyPathDebounced: function(path, value, max_wait){
+      notifyPathDebounced: function(path, ignored, max_wait){
+        // TODO: might want a max_count options in addition to a max_wait,
+        // would then issue debounce either after max_wait or when the list
+        // grows to max_count, whichever occurs sooner.
+
+        // Note we ignore the second arg, which you might have expected would
+        // be value.  We read it from the model directly.  This is helpful
+        // because the value may change before the debouncer fires.
+
+        // path can be a string or array of strings (which will simply be "."-joined
+        // into a string).  Currently you cannot use array indexing, only array
+        // keys.
+
         if(!max_wait || max_wait < 0){
           throw "only positive values of max_wait supported"
         }
@@ -93,13 +181,12 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
           // all to be processed in smaller batches.
 
           clearTimeout(debouce_timeout);
-          debouce_timeout = setTimeout(process_decounced_notify_paths, max_wait);
+          debouce_timeout = setTimeout(process_debounced_notify_paths, max_wait);
         }
 
         debounced_notify_path_list.push({
           model: this,
-          path: path,
-          value: value
+          path: path
         });
       },
 
