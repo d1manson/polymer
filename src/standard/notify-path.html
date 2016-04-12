@@ -63,98 +63,105 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    let debouce_timeout = null;
    let debounced_notify_path_list = [];
 
-   var process_debounced_notify_paths = function(){      
-      /*
-      // use original mechanism
-      
-      for(let item of debounced_notify_path_list){
-          item.model.notifyPath(item.path, item.model.get(item.path));
-      }
-      debounced_notify_path_list.length = 0;
-      return;
-      */
-
-      let models = new Map();
-      for(let item of debounced_notify_path_list){
-          let model_items = models.get(item.model);
-          if(!model_items){
-            model_items = [];
-            models.set(item.model, model_items);
-          }
-          model_items.push(Array.isArray(item.path) ? item.path.join(".") : item.path);
-      }
-
-      for(let [model, paths_for_model] of models){
-          paths_for_model.sort();
-          let property = '.';
-          let paths_for_property = [];
-          let last_path = '';
-          for(let path of paths_for_model){
-            if((path + ".").substring(0, property.length) !== property){
-              notify_paths_for_model_property.call(model, property.slice(0,-1), paths_for_property);
-              property = path.split(".", 1)[0] + ".";
-              paths_for_property.length = 0;
-            }
-            (path !== last_path) && paths_for_property.push(path);
-            last_path = path;
-          }
-          notify_paths_for_model_property.call(model, property.slice(0,-1), paths_for_property);
-      }
-
-      debounced_notify_path_list.length = 0;
-   };
-
-
-   var notify_paths_for_model_property = function(property, paths, from_above){
-      if(!property){
-        return;
-      }
-
-      let values = [];
-      for(let path of paths){
-        values.push(this._get(path));
-      }
-
-      let fx$ = this._propertyEffects && this._propertyEffects[property];    
-      if (fx$) {
-        for (let fx of fx$) {
-          // use memoized path functions
-          let fxFn = fx.pathFn;
-          if (fxFn) {
-            for(let ii=0; ii<paths.length; ii++){
-              fxFn.call(this, paths[ii], values[ii], fx.effect);
-            }
-          }
-        }
-      }
-
-      // notify runtime-bound paths
-      if (this._boundPaths) {
-        for(let ii=0; ii<paths.length; ii++){
-          this._notifyBoundPaths(paths[ii], values[ii]);
-        }
-      }
-
-      // notify up
-      if(!from_above){
-        let event_name = this._modelForPath(property) + this._EVENT_CHANGED;
-        for(let ii=0; ii<paths.length; ii++){
-            this.fire(event_name, {
-              path: paths[ii],
-              value: values[ii]
-            }, {bubbles: false, _useCache: true});
-        }
-      }
-
-   };
-
-
   (function() {
     // Using strict here to ensure fast argument manipulation in array methods
     'use strict';
 
 
     Polymer.Base._addFeature({
+
+       _process_debounced_notify_paths: function(){    
+          // this is a "static" function
+
+          /*
+          // use original mechanism
+
+          for(let item of debounced_notify_path_list){
+              item.model.notifyPath(item.path, item.model.get(item.path));
+          }
+          debounced_notify_path_list.length = 0;
+          return;
+          */
+
+          let models = new Map();
+          for(let item of debounced_notify_path_list){
+              let model_items = models.get(item.model);
+              if(!model_items){
+                model_items = [];
+                models.set(item.model, model_items);
+              }
+              model_items.push(Array.isArray(item.path) ? item.path.join(".") : item.path);
+          }
+
+
+          for(let [model, paths_for_model] of models){
+              paths_for_model.sort();
+              let property = '.';
+              let paths_for_property = [];
+              let last_path = '';
+              for(let path of paths_for_model){
+                if((path + ".").substring(0, property.length) !== property){
+                  model._notify_paths_for_model_property(property.slice(0,-1), paths_for_property);
+                  property = path.split(".", 1)[0] + ".";
+                  paths_for_property.length = 0;
+                }
+                (path !== last_path) && paths_for_property.push(path);
+                last_path = path;
+              }
+              model._notify_paths_for_model_property(property.slice(0,-1), paths_for_property);
+          }
+
+          debounced_notify_path_list.length = 0;
+       },
+
+
+       _notify_paths_for_model_property: function(property, paths, from_above){
+          if(!property){
+            return;
+          }
+
+
+          let fx$ = this._propertyEffects && this._propertyEffects[property];    
+          if (fx$) {
+            let values = [];
+            for(let path of paths){
+              values.push(this._get(path));
+            }
+
+            for (let fx of fx$) {
+              // use memoized path functions
+              let fxFn = fx.pathFn;
+              if (fxFn) {
+                for(let ii=0; ii<paths.length; ii++){
+                  fxFn.call(this, paths[ii], values[ii], fx.effect);
+                }
+              }
+            }
+          }
+
+          // notify runtime-bound paths
+          if (this._boundPaths) {
+            for(let ii=0; ii<paths.length; ii++){
+              this._notifyBoundPaths(paths[ii], values[ii]);
+            }
+          }
+
+          // notify up, we send a normal-looking change event, but with a special 
+          // value payload that includes all paths.
+          if(!from_above){
+            let event_name = this._modelForPath(property) + this._EVENT_CHANGED;
+            // the property name itself is not valid from above, so just give suffixes
+            let suffixes = [];
+            for(let path of paths){
+              suffixes.push(path.slice(property.length+1));
+            }
+            this.fire(event_name, {
+                  path: property,
+                  value: {__debounced_path_suffixes: suffixes}
+                }, {bubbles: false, _useCache: true});
+          }
+
+       },
 
 
       notifyPathDebounced: function(path, ignored, max_wait){
@@ -181,7 +188,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
           // all to be processed in smaller batches.
 
           clearTimeout(debouce_timeout);
-          debouce_timeout = setTimeout(process_debounced_notify_paths, max_wait);
+          debouce_timeout = setTimeout(Polymer.Base._process_debounced_notify_paths, max_wait);
         }
 
         debounced_notify_path_list.push({
@@ -216,7 +223,15 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
       // Note: this implemetation only accepts key-based array paths
       _notifyPath: function(path, value, fromAbove) {
-        //console.log("_notifyPath: " + path + (fromAbove ? " (fromAbove)" : ""));
+
+        if(value && value.__debounced_path_suffixes){
+          let local_paths = [];
+          for(let suffix of value.__debounced_path_suffixes){
+            local_paths.push( suffix ? path + "." + suffix : path );
+          }
+          this._notify_paths_for_model_property(path, local_paths, fromAbove);
+          return;
+        }
 
         var old = this._propertySetter(path, value);
         // manual dirty checking for now...
@@ -736,6 +751,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
           _EVENT_CHANGED: Polymer.Base._EVENT_CHANGED,
           _notifyPath: Polymer.Base._notifyPath,
           _notifyPathUp: Polymer.Base._notifyPathUp,
+          _notify_paths_for_model_property: Polymer.Base._notify_paths_for_model_property,
           _pathEffector: Polymer.Base._pathEffector,
           _annotationPathEffect: Polymer.Base._annotationPathEffect,
           _complexObserverPathEffect: Polymer.Base._complexObserverPathEffect,
