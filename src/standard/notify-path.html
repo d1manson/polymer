@@ -59,11 +59,51 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * @class data feature: path notification
    */
 
+   let debounce_time = Infinity;
+   let debouce_timeout = null;
+   let debounced_notify_path_list = [];
+
+   var process_decounced_notify_paths = function(){
+      //console.log("debounce notifying...");
+      for(let item of debounced_notify_path_list){
+          item.model.notifyPath(item.path, item.value);
+      }
+      //console.log("debounced notifying finished.");
+      debounced_notify_path_list = [];
+   };
+
+
   (function() {
     // Using strict here to ensure fast argument manipulation in array methods
     'use strict';
 
+
     Polymer.Base._addFeature({
+
+
+      notifyPathDebounced: function(path, value, max_wait){
+        if(!max_wait || max_wait < 0){
+          throw "only positive values of max_wait supported"
+        }
+
+        let now = Date.now();
+        if(now + max_wait < debounce_time){
+          // note that all debounced request will be processed at the same time,
+          // so if one debounce request has a short max_time, it will force them
+          // all to be processed in smaller batches.
+
+          clearTimeout(debouce_timeout);
+          debouce_timeout = setTimeout(process_decounced_notify_paths, max_wait);
+        }
+
+        debounced_notify_path_list.push({
+          model: this,
+          path: path,
+          value: value
+        });
+      },
+
+
       /**
        * Notify that a path has changed.
        *
@@ -89,6 +129,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
       // Note: this implemetation only accepts key-based array paths
       _notifyPath: function(path, value, fromAbove) {
+        //console.log("_notifyPath: " + path + (fromAbove ? " (fromAbove)" : ""));
+
         var old = this._propertySetter(path, value);
         // manual dirty checking for now...
         // NaN is always not equal to itself,
@@ -602,6 +644,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
           _getEvent: Polymer.Base._getEvent,
           __eventCache: Polymer.Base.__eventCache,
           notifyPath: Polymer.Base.notifyPath,
+          notifyPathDebounced: Polymer.Base.notifyPathDebounced,
           _get: Polymer.Base._get,
           _EVENT_CHANGED: Polymer.Base._EVENT_CHANGED,
           _notifyPath: Polymer.Base._notifyPath,
